@@ -60,20 +60,12 @@ def parse_args():
     parser = argparse.ArgumentParser(description="PyTorch MNIST Example")
 
     parser.add_argument('--data_dir', type=str, default="./data/mnist")
+    parser.add_argument('--smdebug_dir', type=str, default="./output/mnist")
     parser.add_argument("--batch-size", type=int, default=4, help="Batch size")
     parser.add_argument("--epochs",
                         type=int,
                         default=1,
                         help="Number of Epochs")
-
-    # SageMaker Debugger: Mention the path where you would like the tensors to be
-    # saved.
-    parser.add_argument(
-        "--smdebug_path",
-        type=str,
-        default=None,
-        help="S3 URI of the bucket where tensor data will be stored.",
-    )
     parser.add_argument("--learning_rate", type=float, default=0.001)
     parser.add_argument("--momentum", type=float, default=0.9)
     parser.add_argument("--random_seed", type=bool, default=False)
@@ -130,15 +122,26 @@ def _get_test_data_loader(test_batch_size, training_dir):
 # SageMaker Debugger: This function created the debug hook required to log tensors.
 # In this example, weight, gradients and losses will be logged at steps 1,2, and 3,
 # and saved to the output directory specified in hyperparameters.
-def create_smdebug_hook():
+def create_smdebug_hook(smdebug_dir):
     # This allows you to create the hook from the configuration you pass to the SageMaker pySDK
-    hook = smd.Hook(out_dir=f'./smd_output/mnist',
-                    save_config=smd.SaveConfig(save_interval=10),
-                    include_collections=['gradients', 'biases'])
+    hook = smd.Hook(
+        out_dir=smdebug_dir,
+        save_config=smd.SaveConfig(save_interval=10),
+        include_collections=[
+            'gradients',
+            'biases',
+            # 'weights', 'losses', 'layers',
+            # 'inputs',
+            # 'outputs'
+        ])
     return hook
 
 
-def train(model, device, optimizer, hook, epochs, log_interval, training_dir):
+# https://github.com/awslabs/sagemaker-debugger/blob/master/smdebug/core/collection.py#L20
+
+
+def train(model, device, optimizer, hook, epochs, log_interval, training_dir,
+          num_steps):
     criterion = nn.CrossEntropyLoss()
     # SageMaker Debugger: If you are using a Loss module and would like to save the
     # values as we are doing in this example, then add a call to register loss.
@@ -151,6 +154,8 @@ def train(model, device, optimizer, hook, epochs, log_interval, training_dir):
         model.train()
         hook.set_mode(smd.modes.TRAIN)
         for i, data in enumerate(trainloader):
+            if i > num_steps:
+                break
             inputs, labels = data
             optimizer.zero_grad()
             output = model(inputs)
@@ -197,20 +202,22 @@ def main():
         np.random.seed(2)
 
     training_dir = opt.data_dir
+    smdebug_dir = opt.smdebug_dir
+    num_steps = opt.num_steps
 
     device = torch.device("cpu")
     model = Net().to(device)
 
     # SageMaker Debugger: Create the debug hook,
     # and register the hook to save tensors.
-    hook = create_smdebug_hook()
+    hook = create_smdebug_hook(smdebug_dir)
     hook.register_hook(model)
 
     optimizer = optim.SGD(model.parameters(),
                           lr=opt.learning_rate,
                           momentum=opt.momentum)
     train(model, device, optimizer, hook, opt.epochs, opt.log_interval,
-          training_dir)
+          training_dir, num_steps)
     print("Training is complete")
 
 
