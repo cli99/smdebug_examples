@@ -25,6 +25,7 @@ from torchvision import datasets, transforms
 
 # SageMaker Debugger: Import the package
 import smdebug.pytorch as smd
+from smdebug.pytorch import Hook, SaveConfig
 
 import numpy as np
 import random
@@ -60,7 +61,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="PyTorch MNIST Example")
 
     parser.add_argument('--data_dir', type=str, default="./data/mnist")
-    parser.add_argument('--smdebug_dir', type=str, default="./output/mnist")
+    parser.add_argument('--output_dir', type=str, default="./output/mnist")
     parser.add_argument("--batch-size", type=int, default=4, help="Batch size")
     parser.add_argument("--epochs",
                         type=int,
@@ -119,25 +120,92 @@ def _get_test_data_loader(test_batch_size, training_dir):
                                        num_workers=4)
 
 
+# https://github.com/cli99/sagemaker-debugger/blob/master/examples/pytorch/scripts/pytorch_hook_demos.py
+
+# https://github.com/awslabs/sagemaker-debugger/blob/master/smdebug/core/collection.py#L20
+
+
 # SageMaker Debugger: This function created the debug hook required to log tensors.
 # In this example, weight, gradients and losses will be logged at steps 1,2, and 3,
 # and saved to the output directory specified in hyperparameters.
-def create_smdebug_hook(smdebug_dir):
+def create_smdebug_hook(output_dir):
     # This allows you to create the hook from the configuration you pass to the SageMaker pySDK
-    hook = smd.Hook(
-        out_dir=smdebug_dir,
+    hook = Hook(
+        out_dir=output_dir,
         save_config=smd.SaveConfig(save_interval=10),
         include_collections=[
-            'gradients',
-            'biases',
-            # 'weights', 'losses', 'layers',
+            'default',
+            # 'gradients',
+            # 'biases',
+            # 'weights',
+            #  'losses',
+            #  'layers',
             # 'inputs',
             # 'outputs'
         ])
     return hook
 
 
-# https://github.com/awslabs/sagemaker-debugger/blob/master/smdebug/core/collection.py#L20
+def create_hook(
+    output_dir,
+    module=None,
+    hook_type="save_all",
+    save_interval=10,
+    export_tensorboard=True,
+):
+    # Create a hook that logs weights, biases, gradients and inputs/ouputs of model every save_interval steps while training.
+    if hook_type == "save_all":
+        hook = Hook(
+            out_dir=output_dir,
+            save_config=SaveConfig(save_interval=save_interval),
+            save_all=True,
+            export_tensorboard=export_tensorboard,
+        )
+        print(hook.get_collections())
+    elif hook_type == "inputs-outputs":
+        # The names of input and output tensors of a module are in following format
+        # Inputs :  <module_name>_input_<input_index>, and
+        # Output :  <module_name>_output
+        # In order to log the inputs and output of a module, we will create a collection as follows:
+        assert module is not None
+
+        # Create a hook that logs weights, biases, gradients and inputs/outputs of model every 5 steps from steps 0-100 while training.
+        hook = Hook(
+            out_dir=output_dir,
+            save_config=SaveConfig(save_steps=[i * 5 for i in range(20)]),
+            include_collections=[
+                "weights", "gradients", "biases", "inputs", "outputs"
+            ],
+            export_tensorboard=export_tensorboard,
+        )
+        hook.get_collection("l_mod").add_module_tensors(module,
+                                                        inputs=True,
+                                                        outputs=True)
+    elif hook_type == "weights-bias-gradients":
+        save_config = SaveConfig(save_steps=[i * 5 for i in range(20)])
+        # Create a hook that logs ONLY weights, biases, and gradients every 5 steps (from steps 0-100) while training the model.
+        hook = Hook(out_dir=output_dir,
+                    save_config=save_config,
+                    export_tensorboard=export_tensorboard,
+                    include_collections=[
+                        'gradients',
+                        'biases',
+                        'weights',
+                    ])
+    else:
+        hook = Hook(
+            out_dir=output_dir,
+            save_config=smd.SaveConfig(save_interval=5),
+            include_collections=[
+                # 'gradients',
+                # 'biases',
+                # 'weights',
+                'layers',
+                # 'losses',
+                'inputs',
+                # 'outputs'
+            ])
+    return hook
 
 
 def train(model, device, optimizer, hook, epochs, log_interval, training_dir,
@@ -202,7 +270,7 @@ def main():
         np.random.seed(2)
 
     training_dir = opt.data_dir
-    smdebug_dir = opt.smdebug_dir
+    output_dir = opt.output_dir
     num_steps = opt.num_steps
 
     device = torch.device("cpu")
@@ -210,8 +278,8 @@ def main():
 
     # SageMaker Debugger: Create the debug hook,
     # and register the hook to save tensors.
-    hook = create_smdebug_hook(smdebug_dir)
-    hook.register_hook(model)
+    hook = create_hook(output_dir, model, hook_type='default')
+    hook.register_module(model)
 
     optimizer = optim.SGD(model.parameters(),
                           lr=opt.learning_rate,
@@ -219,6 +287,10 @@ def main():
     train(model, device, optimizer, hook, opt.epochs, opt.log_interval,
           training_dir, num_steps)
     print("Training is complete")
+
+    # Users can call this method to immediately use the Trials API.
+    hook.close()
+    smd.del_hook()
 
 
 if __name__ == "__main__":

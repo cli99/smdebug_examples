@@ -19,13 +19,13 @@ class CustomGradientRule(Rule):
         return False
 
 
-smdebug_dir = './output/mnist'
+smdebug_dir = './output/test'
 
 trial = create_trial(path=smdebug_dir)
-# print((trial.tensor_names()))
+print((trial.tensor_names()))
 
-rule_obj = CustomGradientRule(trial, threshold=0.0001)
-invoke_rule(rule_obj, start_step=0, end_step=None)
+# rule_obj = CustomGradientRule(trial, threshold=0.0001)
+# invoke_rule(rule_obj, start_step=0, end_step=None)
 
 # values = trial.tensor('CrossEntropyLoss_output_0').values()
 # values_eval = np.array(list(values.items()))
